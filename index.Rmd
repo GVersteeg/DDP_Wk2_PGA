@@ -10,8 +10,7 @@ knitr::opts_chunk$set(echo = FALSE)
 ```
 
 ## Setup environment
-
-First let us setup the appropriate libraries:
+First let's setup the appropriate libraries:
 
 ```{r init, echo=TRUE, warning=FALSE, error=FALSE}
 library("leaflet", warn.conflicts=FALSE)  ## load leaflet silently
@@ -135,7 +134,11 @@ DF_tot %>%
                                  "PM10 = ", DF_tot$PM10))
 ```
 
-## The Map: The Hague (the Netherlands)
+## The Hague (the Netherlands)
+Created: G. Versteeg (July 23rd, 2017)
+
+Data shown: Air Polution measured by 3 RIVM stations
+
 ```{r l2, echo=FALSE, warning=FALSE, error=FALSE}
 DF_tot %>%
         leaflet() %>%
