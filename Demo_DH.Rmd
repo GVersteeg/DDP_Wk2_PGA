@@ -1,0 +1,193 @@
+---
+title: "Demo-DH. Vergelijking meetgegevens RIVM (AVK, BL, RS)"
+author: "Gerrit Versteeg"
+date: "January 31th, 2017"
+output:
+  pdf_document: default
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis
+In dit rapport onderzoeken we de verschillen in de metingen voor drie RIVM-meetstations locaties in Den Haag (Amsterdamse Veerkade, Bleriotlaat en Rebecquestraat).
+
+De analyse leidt tot de volgende conclusies. Er lijkt een toename in emissie te zijn voor NO, NO2 en PM10 op de drie meetstations over de periode van 2015 tot nu. Voor de trend is een standaard lineair model gebruikt. De meetmomenten liggen nogal onregelmatig verspreid in clusters, waarvoor verder gecompenseerd moet worden. Qua gemiddeld dagpatroon is een duidelijke ochtendspits zichtbaar, maar vrijwel geen avondspits. De reden hiervoor is nog onduidelijk.   
+
+
+## Data Processing
+### Loading the data
+De data voor dit onderzoek is opgevraagd bij: https://www.luchtmeetnet.nl/download
+door selectie van telkens één van de vier RIVM-meetstations in Den Haag,
+gevolgd door de selectie van de breedste periode van aanwezige gevalideerde meetdata (groen gemarkeerde datums) en de invoer van een email-adres voor het resulterende csv-bestand (extract.csv). De csv-bestanden zijn vanuit de eMails opgeslagen in de werkdirectory onder de subdirectory 'data'.
+
+Dit proces is uitgevoerd voor alle (4) meetstations in Den Haag:
+Export_AVK.csv (312 kB) - Amsterdamse Veerkade
+Export_BL.csv  (353 kB) - Bleriotlaan
+Export_RS.csv  (468 kB) - Rebecquestraat
+Vaillantlaan, kent geen datums met gevalideerde meetdata en levert derhalve een leeg bestand op.
+
+De drie bestande met gevalideerde inhoud zijn in Nederlands csv-formaat (sep=; en dec=,) daarom gebruiken we read.csv2. De files worden in tibbles geplaatst en daarna samengevoegd tot één tibble (DF_RIVM) gebruikmakend van dplyr voor snellere en eenvoudigere datamanipulatie.
+
+```{r loading,ECHO = TRUE}
+library("plyr", warn.conflicts=FALSE)           ## load plyr silently
+library("dplyr", warn.conflicts=FALSE)          ## load dplyr silently
+library("ggplot2", warn.conflicts=FALSE)        ## load ggplot2 silently
+
+dateDownloaded <- date()                        ## register date download
+DF_AVK <- tbl_df(read.csv2("./data/Export_AVK.csv"))
+DF_BL <- tbl_df(read.csv2("./data/Export_BL.csv"))
+DF_RS <- tbl_df(read.csv2("./data/Export_RS.csv"))
+DF_RIVM <- bind_rows(DF_AVK, DF_BL, DF_RS)      ## concatenate station data
+DF_RIVM                                         ## take a peek
+```
+
+De 'coercion'-warnings vertellen ons dat er verschillen in de levels (i.e. factors) zijn tussen de drie verschillende bestanden. Daarom heeft dplyr de formaten van de variabelen met verschillende factors terugegzet naar "character"
+
+Afgeleid uit de door RIVM/LMN meegestuurde data-sheet bevat het bestand gevalideerde uurgemiddelde meetwaarden in csv-format (punt-komma gescheiden):
+
+* Tijdstip      : eindtijdstip van metingen van metingen waarmee uurgemiddelde is bepaald
+* Locatie       : naam van meetpunt
+* Component     : naam van component
+* Waarde        : uurgemiddelde meetwaarde (decimaalteken is een komma)
+* LKI           : luchtkwaliteitsindex; meetwaarde is omgezet tot een getal van 1 (weinig luchtverontreiniging) tot 11 (veel luchtverontreiniging), voor meer informatie zie https://www.luchtmeetnet.nl/uitleg#
+
+
+### Preprocessing the data
+De volgende stap is het voorbereiden van de data voor analyse. Daarvoor gaan we data schoonmaken, filteren en verrijken. Allereerst even de de verschillende variabelen (kolommen) nader beschouwen.  
+
+**tijdstip**
+
+Deze variabele geeft ons het meetmoment. Hierbij geldt dat:
+2016-01-01 01:00:00+01:00 het gemeten resultaat is van de periode tussen 2016-01-01 00:00:00 en 2016-01-01 01:00:00 in wintertijd in Nederland.
+
+Laten we eerst kijken naar de hoeveelheid unieke meetmomenten per meetstation. Dat doen we door voor variabele 'tijdstip' voor elk bestand een vector te maken met de factors en daarvan de lengte te bepalen, dan weten we het aantal unieke waarden.
+
+```{r levelcheck_tijdstip, ECHO=TRUE}
+length(levels(DF_AVK$tijdstip))         ## levels() geeft een vector van de unieke
+length(levels(DF_BL$tijdstip))          ## factors voor variabele 'tijdstip', de 
+length(levels(DF_RS$tijdstip))          ## lengte ervan geeft # unieke waarden.
+```
+
+Het aantal meetmomenten verschilt per meetstation en daar moeten we rekening mee houden want voor onderlinge vergelijking moeten we alleen de meetmomenten hebben met registraties voor elk van de drie stations.
+
+Vanuit de variabele 'tijdstip' gaan we in verband met plotting in de tijd drie nieuwe variabelen maken, namelijk: datetime (POSIXct-formaat), date (Date-formaat) en time (Time-formaat). Hiermee kunnen individueel meetmomenten herkennen en ook gemiddelden per dag met elkaar vergelijken en de meetwaarden over de verschillende momenten op een dag.
+
+**locatie**
+
+Het betrokken meetstation gaan we afkorten tot een handzamer formaat, waarbij het deel 'Den Haag -' wordt verwijderd. Tevens zetten de variabele locatie in DF_RIVM om naar een factor-formaat om plotting eenvoudiger te maken.
+
+**component**
+
+De variabele "component" verwijst naar de gemeten indicatoren (NO, NO2, O3, PM10 en PM2.5). Laten we even kijken naar welke indicatoren door welk meetstation worden gemeten. Ook hier gebruiken we levels() om de factors in de originele bestanden te bekijken
+
+```{r EXPcheck, ECHO=TRUE}
+levels(DF_AVK$component)
+levels(DF_BL$component)
+levels(DF_RS$component)
+```
+
+Alle drie meten NO, NO2 en PM10. Bleriotlaan meet ook nog O3, terwijl de Rebecquestraat ook O3 en PM2.5 meet. Ook hier moeten we rekening mee houden. In dit voorbeeld kiezen we ervoor om alleen de componenten en meetmomenten te nemen die in alle drie meetstations voorkomen. Verder zetten we 'locatie' terug naar het formaat 'factor'. 
+
+**waarde**
+
+Is de werkelijke meetwaarde als een uurgemiddelde over het meetmoment in ug/m3. Formaat houden we 'numeric'.
+
+
+**LKI**
+
+Is een categorisering van de meetwaarden in waarden van 1 (goed) tot 11 (slecht). Deze variabele gebruiken we voorlopig niet.
+
+
+```{r Preprocessing,ECHO=TRUE}
+gmm <- intersect(levels(DF_AVK$tijdstip),           ## vul gmm met de gemeen-
+              intersect(levels(DF_BL$tijdstip),     ## schappelijke meetmomenten
+                levels(DF_RS$tijdstip)))            ## in alle drie meetstations
+
+gcp <- intersect(levels(DF_AVK$component),          ## vul gcp met de gemeen-
+              intersect(levels(DF_BL$component),    ## schappelijke indicatoren
+                levels(DF_RS$component)))           ## in alle drie meetstations
+
+colnames(DF_RIVM)[3] <- "indicator"                 ## varname to 'indicator'
+DF_RIVM$locatie <- as.factor(DF_RIVM$locatie)       ## format 'locatie' as factor
+levels(DF_RIVM$locatie) <- sub("Den Haag-","", 
+                levels(DF_RIVM$locatie))            ## en skip 'Den Haag-' deel
+
+DF_prep <-                                          ## Create DF_prep
+        DF_RIVM %>%                                 ## using DF-RIVM to filter
+        filter(tijdstip %in% gmm) %>%               ## only common dates
+        filter(indicator %in% gcp) %>%              ## only common indicators
+        mutate(indicator = as.factor(indicator)) %>%  ## set to format: factor
+        mutate(datetime = as.POSIXct(strptime(tijdstip,
+                "%Y-%m-%d %H:%M:%S"))) %>%          ## add datetime column
+        mutate(date = as.Date(strptime(tijdstip, 
+                "%Y-%m-%d"))) %>%                   ## add date column
+        mutate(time = format(datetime, 
+                "%H:%M:%S")) %>%                    ## add time column
+        print()                                     ## and let's have a look
+```
+
+Even controleren of we geen missing values hebben door de combinatie van drie meetstations:
+
+```{r checkNA, ECHO = TRUE}
+sum(is.na(DF_prep))                 ## to check for missing values in dataset
+```
+
+Zoals te verwachten zijn er geen missing values, dus we kunnen starten met wat exploratief onderzoek van de emissie-waarden.
+
+\pagebreak
+
+## Results
+### Plotting the indicators accross months
+We gaan de drie indicatoren (NO, NO2 en PM10) in drie plots met verschillende kleuren voor de indicatoren per maand uitzetten in een plot, om de verschillen te bekijken. 
+Voor de plot maken we een dedicated dataframe DF_month gebaseerd op DF_prep, die dan gebruikt wordt voor een plot met 9 facetten (indicatoren in de rijen en meetstations in de kolommen). 
+
+```{r month-plot, ECHO=TRUE}
+DF_month <-                                              ## create DF_month
+        DF_prep %>%                                      ## using DF-prep to
+        group_by(date, indicator, locatie) %>%           ## group by date,comp,loc
+        summarize(avg = mean(waarde, na.rm = TRUE)) %>%  ## calc. avg waarde
+        arrange(date)                                    ## sort ascending by date
+
+g <- ggplot(DF_month, 
+        aes(x=date, y=avg))                              ## setup graphic object
+
+g + geom_point() +
+      geom_smooth(method="lm") +                         ## plot a trendline
+      facet_grid(indicator~locatie) +                    ## plot facets per comp/loc
+      theme(axis.text.x = element_text(size=6, angle=-90)) + ## adjust X-labels
+      xlab("Tijd") +                                     ## lable X-axis
+      ylab("Emissie") +                                  ## lable Y-axis
+      ggtitle("Emissies in Den Haag (2015-2017)")        ## title plot
+```
+
+\pagebreak
+
+### Plotting the indicator patterns during the day
+We gaan de dagelijkse patronen van de drie indicatoren (NO, NO2 en PM10) in drie plots per meetstation met verschillende kleuren voor de indicatoren uitzetten in een plot, om het verloop per dag te bekijken.
+
+ook voor deze plot maken we een dedicated dataframe DF_day gebaseerd op DF_prep, die dan gebruikt wordt voor een plot met 3 facetten (meetstations in de rijen, met kleuren voor de indicatoren). 
+
+
+```{r day-plot, ECHO=TRUE}
+DF_day <-                                                ## create DF_month
+        DF_prep %>%                                      ## using DF-prep to
+        group_by(time, indicator, locatie) %>%           ## group by date,comp,loc
+        summarize(avg = mean(waarde, na.rm = TRUE)) %>%  ## calc. avg waarde
+        arrange(time)                                    ## sort ascending by date
+
+h <- ggplot(DF_day, 
+        aes(x=time, y=avg, color=locatie))               ## setup graphic object
+
+h + geom_point() +
+      geom_smooth(method="lm") +                         ## plot a trendline
+      facet_grid(indicator~.) +                          ## plot facets per ind
+      theme(axis.text.x = element_text(size=6, angle=-90)) + ## adjust X-labels
+      xlab("Tijd gedurende dag") +                       ## lable X-axis
+      ylab("Emissie") +                                  ## lable Y-axis
+      ggtitle("Gemiddelde emissies Den Haag (2015-2017)") ## title plot
+```
+
